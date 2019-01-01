@@ -7,7 +7,15 @@ defmodule Exparic.MixProject do
       version: "0.1.0",
       elixir: "~> 1.6",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+
+      package: [
+        licenses: ["MIT"],
+        links: %{"GitHub" => "https://github.com/bersegosx/exparic"}
+      ],
+      description: "Web parser via yaml and css",
+      name: "exparic",
+      source_url: "https://github.com/bersegosx/exparic",
     ]
   end
 
@@ -23,6 +31,8 @@ defmodule Exparic.MixProject do
       {:yaml_elixir, "~> 2.1"},
       {:httpoison, "~> 1.5"},
       {:stream_data, "~> 0.1", only: :test},
+
+      {:ex_doc, "~> 0.18.0", only: :dev, runtime: false},
     ]
   end
 end
