@@ -12,7 +12,7 @@ The package can be installed by adding `exparic` to your list of dependencies in
 ```elixir
 def deps do
   [
-    {:exparic, "~> 0.1.0"}
+    {:exparic, "~> 0.1.1"}
   ]
 end
 ```

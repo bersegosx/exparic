@@ -192,7 +192,9 @@ defmodule Exparic.Worker do
   end
 
   def extract_attr([], _, _), do: nil
-  def extract_attr(v, "href" = attr, _), do: Floki.attribute(v, attr) |> hd
+  def extract_attr(v, attr, _) when attr in ["href", "src", "content"] do
+    Floki.attribute(v, attr) |> hd
+  end
   def extract_attr(v, "html", _), do: Floki.raw_html(v, encode: true)
   def extract_attr(v, attr, keep) when attr in ["", "text"] do
     case v do
