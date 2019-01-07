@@ -179,7 +179,7 @@ defmodule Exparic.Worker do
           step
         end
 
-      Coordinator.call(state.coordinator_pid, {:add_task, step})
+      GenServer.cast(state.coordinator_pid, {:add_task, step})
     end)
   end
 

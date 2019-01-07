@@ -10,12 +10,15 @@ defmodule Exparic.Coordinator do
   end
 
   defstruct [
-    config: %{}, queue: nil, workers: [], result: [], ack_count: 0,
+    config: %{}, queue: nil, result: [], ack_count: 0,
     start_time: nil, end_time: nil,
     task_waiters: [],
     result_waiter: nil,
     mode: :gather, receiver_pid: nil,
-    worker_config: %{}
+    worker_config: %{},
+    worker_sup: nil,
+    active_tasks: %{},
+    workers: %{}
   ]
 
   @default_worker_config %{
@@ -44,7 +47,7 @@ defmodule Exparic.Coordinator do
   end
 
   def init([config, mode, worker_config, receiver_pid]) do
-    Logger.metadata(coordinator: :parser)
+    Logger.metadata(coordinator: config["parser"]["name"])
     queue = init_queue(config)
     queue_lenth = :queue.len(queue)
 
@@ -59,21 +62,36 @@ defmodule Exparic.Coordinator do
     Logger.debug("Mode: #{inspect state.mode}")
     Logger.debug("Spawns new workes: #{workers_num}")
 
-    {:ok, _} = Supervisor.start_link(
-      [{DynamicSupervisor, name: Exparic.WorkerSup, strategy: :one_for_one}],
-      strategy: :one_for_one
-    )
+    {:ok, worker_sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
+    Logger.debug("Worker supervisor started: #{inspect worker_sup}")
 
     workers =
       Enum.map(1..workers_num, fn idx ->
-        {:ok, child} = DynamicSupervisor.start_child(Exparic.WorkerSup,
+        {:ok, child} = DynamicSupervisor.start_child(worker_sup,
           {Exparic.Worker, [self(), state.config, idx, state.worker_config]}
         )
         child
       end)
 
     Logger.debug("Workers were spawned: #{inspect workers}")
-    {:noreply, %{state| workers: workers}}
+    {:noreply, %{state| worker_sup: worker_sup}}
+  end
+
+  def handle_info({:DOWN, _ref, :process, _pid, :shutdown}, state) do
+    {:noreply, state}
+  end
+
+  def handle_info(
+    {:DOWN, ref, :process, pid, reason},
+    %{workers: workers, active_tasks: active_tasks} = state) do
+
+    Logger.warn("worker down, reason: #{inspect reason}, #{inspect workers}, #{inspect active_tasks}")
+    {_, workers} = Map.pop(workers, pid)
+    {task, active_tasks} = Map.pop(active_tasks, ref)
+
+    GenServer.cast(self(), {:add_task, task})
+
+    {:noreply, %{state| workers: workers, active_tasks: active_tasks}}
   end
 
   def handle_call(:get_task, client, state) do
@@ -82,7 +100,9 @@ defmodule Exparic.Coordinator do
          {:noreply, %{state| task_waiters: [client|state.task_waiters]}}
 
        {{:value, v}, q} ->
-         {:reply, v, %{state| queue: q}}
+         {client_pid, _} = client
+         {new_workers, active_tasks} = give_task(client_pid, v, state)
+         {:reply, v, %{state| queue: q, workers: new_workers, active_tasks: active_tasks}}
      end
   end
 
@@ -104,21 +124,25 @@ defmodule Exparic.Coordinator do
     {:reply, :thanks, %{state| ack_count: ack_count - 1}}
   end
 
-  def handle_call({:add_task, value}, _from, %{task_waiters: tw} = state) when length(tw) > 0 do
-    Logger.debug(":add_task waiters, #{inspect {value, tw}}")
-    {client, task_waiters} = List.pop_at(tw, -1)
-    GenServer.reply(client, value)
-    {:reply, :ok, %{state| task_waiters: task_waiters, ack_count: state.ack_count + 1}}
-  end
-
-  def handle_call({:add_task, value}, _from, state) do
-    Logger.debug(":add_task no_waitets, #{inspect value}")
-    new_q = :queue.in_r(value, state.queue)
-    {:reply, :ok, %{state| queue: new_q, ack_count: state.ack_count + 1}}
-  end
-
   def handle_call(:get_result, client, state) do
     {:noreply, %{state| result_waiter: client}}
+  end
+
+  def handle_cast({:add_task, value}, %{task_waiters: tw} = state) when length(tw) > 0 do
+    Logger.debug(":add_task waiters, #{inspect {value, tw}}")
+
+    {{client_pid, _} = client, task_waiters} = List.pop_at(tw, -1)
+    {new_workers, active_tasks} = give_task(client_pid, value, state)
+
+    GenServer.reply(client, value)
+    {:noreply, %{state| task_waiters: task_waiters, ack_count: state.ack_count + 1,
+                        workers: new_workers, active_tasks: active_tasks}}
+  end
+
+  def handle_cast({:add_task, value}, state) do
+    Logger.debug(":add_task no_waitets, #{inspect value}")
+    new_q = :queue.in_r(value, state.queue)
+    {:noreply, %{state| queue: new_q, ack_count: state.ack_count + 1}}
   end
 
   def handle_cast(:task_done, state) do
@@ -134,7 +158,7 @@ defmodule Exparic.Coordinator do
         GenServer.reply(w, :nil)
       end)
     end)
-    :ok = Supervisor.stop(Exparic.WorkerSup)
+    :ok = Supervisor.stop(state.worker_sup)
 
     end_time = System.monotonic_time(:millisecond)
     Logger.debug("Work has done\n#{inspect state.result, pretty: true}")
@@ -146,6 +170,18 @@ defmodule Exparic.Coordinator do
     end
 
     {:noreply, %{state| end_time: end_time}}
+  end
+
+  defp give_task(worker_pid, task, %{workers: workers, active_tasks: active_tasks}) do
+    {ref, new_workers} =
+      if Map.has_key?(workers, worker_pid) do
+        {workers[worker_pid], workers}
+      else
+        ref = Process.monitor(worker_pid)
+        {ref, Map.put(workers, worker_pid, ref)}
+      end
+
+    {new_workers, Map.put(active_tasks, ref, task)}
   end
 
   @spec init_queue(map()) :: tuple()
