@@ -24,7 +24,7 @@ defmodule Exparic do
     end
   end
 
-  defp load(path) do
+  def load(path) do
     {:ok, parser_config} = YamlElixir.read_from_file(path)
     parser_config
   end

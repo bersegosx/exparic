@@ -187,14 +187,11 @@ defmodule Exparic.Worker do
     if String.ends_with?(v, ["::text", "::html"]) do
       String.split(v, "::", parts: 2) |> List.to_tuple
     else
-      {v, ""}
+      {v, "text"}
     end
   end
 
   def extract_attr([], _, _), do: nil
-  def extract_attr(v, attr, _) when attr in ["href", "src", "content"] do
-    Floki.attribute(v, attr) |> hd
-  end
   def extract_attr(v, "html", _), do: Floki.raw_html(v, encode: true)
   def extract_attr(v, attr, keep) when attr in ["", "text"] do
     case v do
@@ -214,6 +211,12 @@ defmodule Exparic.Worker do
 
       [_|_] ->
           Enum.map(v, &Floki.text/1)
+    end
+  end
+  def extract_attr(v, attr, _) do
+    case Floki.attribute(v, attr) do
+      [result] -> result
+      _ -> nil
     end
   end
 
